@@ -1,96 +1,91 @@
-# gotify-mqtt-forwarder 配置示例
-# 复制为 config.yaml 后按需修改
+# Gotify → MQTT 转发服务配置示例
+# 支持多个 Gotify 实例（group），每个实例可转发到多个目标（target），
+# 每个目标可发布到多个 Broker（broker）。
 
-# PID 文件路径，用于保证单进程运行
+# PID 文件路径，保证同时只有一个进程（可选，默认 /tmp/gotify-mqtt-forwarder.pid）
 pid_file: /var/run/gotify-mqtt-forwarder.pid
 
 groups:
-  # ── 示例 1：家庭 Gotify，按 AppID 分流到不同 Broker ──────────────────────
-  - name: home
-
+  # ── 示例1：单实例转发 ───────────────────────────────────────────────
+  - name: home-gotify
     gotify:
-      url: https://gotify.home.example.com
-      token: "your-client-token-here"
+      url: "http://gotify.example.com:8080"
+      token: "your-client-token"
       tls_skip_verify: false
 
     targets:
-      # 目标 A：转发所有消息到本地 Broker，Topic 中嵌入 AppID 和 Title
-      - name: all-to-local
-        filter:
-          # app_ids 为空 → 不过滤，转发全部应用消息
-          app_ids: []
-          # user_ids 为空 → 不过滤（Token 所属用户 ID 在启动时自动解析）
-          user_ids: []
-          priority_min: 0
-          # priority_max 不填 → 不限上限
+      - name: all-messages
+        filter: {}   # 空 filter 表示转发所有消息
+
         brokers:
-          - url: mqtt://broker.home.example.com:1883
-            username: mqtt_user
-            password: mqtt_pass
-            client_id: forwarder-home-all
-            qos: 0
-            retain: false
-            queue_size: 512
+          # ── mqtt:// ── 明文 TCP，本地 Broker ──────────────────────────
+          - dsn: "mqtt://user:pass@localhost:1883?client_id=home-forwarder&qos=1&keep_alive=30s"
             topics:
-              - "gotify/{{.AppID}}/messages"
-              - "gotify/user/{{.UserID}}/all"
+              - "gotify/app/{{.AppID}}/messages"
+              - "gotify/user/{{.UserName}}/messages"
 
-      # 目标 B：只转发 AppID 为 10、20 且优先级 ≥ 7 的告警到安全 Broker
-      - name: critical-alerts
+          # ── mqtts:// ── TLS 加密 TCP ──────────────────────────────────
+          - dsn: "mqtts://user:pass@mqtt.example.com:8883?ca=/etc/ssl/ca.crt&reconnect_delay_max=120s"
+            topics:
+              - "gotify/{{.AppID}}/{{.Priority}}"
+
+          # ── ws:// ── WebSocket over HTTP ──────────────────────────────
+          - dsn: "ws://mqtt.example.com:8083/mqtt?queue_size=512"
+            topics:
+              - "gotify/ws/{{.ID}}"
+
+          # ── wss:// ── WebSocket over TLS ─────────────────────────────
+          - dsn: "wss://mqtt.example.com:8084/mqtt?insecure=true"
+            topics:
+              - "gotify/wss/all"
+
+      # 只转发特定 App，按优先级过滤
+      - name: alert-only
         filter:
-          app_ids: [10, 20]
-          priority_min: 7
+          app_ids: [3, 7]
+          priority_min: 5
         brokers:
-          - url: mqtts://secure-broker.home.example.com:8883
-            client_id: forwarder-home-critical
-            qos: 1
-            retain: true
+          - dsn: "mqtt://localhost:1883?client_id=home-alert&qos=2&retain=true"
             topics:
-              - "alerts/critical/{{.AppID}}/{{.Title}}"
-              - "alerts/all"
-            tls:
-              ca: /etc/ssl/certs/ca.crt
-              # cert / key 可选（mTLS）
-              # cert: /etc/ssl/certs/client.crt
-              # key:  /etc/ssl/certs/client.key
-              insecure: false
+              - "alerts/{{.AppID}}/{{.Title}}"
 
-  # ── 示例 2：公司 Gotify，按 UserID 路由，同时发布到两个 Broker ──────────
-  - name: work
-
+  # ── 示例2：多实例并行 ──────────────────────────────────────────────
+  - name: office-gotify
     gotify:
-      url: https://gotify.corp.example.com
-      token: "work-client-token"
+      url: "https://gotify-office.example.com"
+      token: "office-token"
+      tls_skip_verify: false
 
     targets:
-      # 所有消息同时转发到两个 Broker（主 + 备）
-      - name: dual-broker
+      - name: office-all
         filter:
-          priority_min: 0
+          user_ids: [1]   # 仅当前 token 对应用户
         brokers:
-          # 主 Broker
-          - url: mqtt://mqtt-primary.corp.example.com:1883
-            client_id: forwarder-work-primary
-            qos: 1
+          - dsn: "mqtts://admin:secret@mqtt-office.example.com:8883?cert=/etc/ssl/client.crt&key=/etc/ssl/client.key&ca=/etc/ssl/ca.crt"
             topics:
-              - "corp/gotify/user/{{.UserID}}/app/{{.AppID}}"
-              - "corp/gotify/all"
-          # 备 Broker
-          - url: mqtt://mqtt-backup.corp.example.com:1883
-            client_id: forwarder-work-backup
-            qos: 1
-            topics:
-              - "backup/gotify/{{.AppID}}/{{.Title}}"
+              - "office/gotify/{{.AppID}}"
 
-      # 仅特定用户（UserID=5）的高优先级消息
-      - name: user5-high-priority
-        filter:
-          user_ids: [5]
-          priority_min: 8
-        brokers:
-          - url: mqtt://mqtt-primary.corp.example.com:1883
-            client_id: forwarder-work-user5
-            qos: 2
-            retain: true
-            topics:
-              - "corp/vip/user/{{.UserID}}/urgent"
+# ── DSN 参数速查表 ────────────────────────────────────────────────────
+# 参数名               | 默认值  | 说明
+# --------------------|---------|------------------------------------
+# client_id           | 自动    | MQTT 客户端 ID（自动 = group-target-host）
+# qos                 | 0       | QoS 等级：0 / 1 / 2
+# retain              | false   | 是否设置 RETAIN 标志
+# queue_size          | 256     | 异步发布队列深度
+# connect_timeout     | 10s     | 连接超时
+# keep_alive          | 30s     | MQTT 心跳间隔
+# reconnect_delay     | 1s      | 初始重连延迟
+# reconnect_delay_max | 60s     | 最大重连延迟（指数退避上限）
+# ca                  | ""      | CA 证书路径（mqtts/wss）
+# cert                | ""      | 客户端证书路径（双向 TLS）
+# key                 | ""      | 客户端私钥路径（双向 TLS）
+# insecure            | false   | 跳过 TLS 证书校验
+
+# ── Topic 模板变量 ────────────────────────────────────────────────────
+# {{.ID}}        消息 ID（uint）
+# {{.AppID}}     应用 ID（uint）
+# {{.UserID}}    用户 ID（uint，来自 /current/user）
+# {{.UserName}}  用户名（string）
+# {{.Title}}     消息标题（特殊字符已转义为 _）
+# {{.Priority}}  优先级（int）
+# {{.Date}}      消息时间（RFC3339）
