@@ -47,7 +47,7 @@ func ParseDSN(dsn string) (*BrokerOptions, error) {
 	opts := &BrokerOptions{
 		Scheme:            u.Scheme,
 		QoS:               0,
-		Retain:            false,
+		Retain:            true,
 		QueueSize:         256,
 		ConnectTimeout:    10 * time.Second,
 		KeepAlive:         30 * time.Second,

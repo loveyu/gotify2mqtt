@@ -101,7 +101,7 @@ groups:
 ### Full structure
 
 ```yaml
-pid_file: /var/run/gotify2mqtt.pid   # optional, default: /tmp/gotify-mqtt-forwarder.pid
+pid_file: /var/run/gotify2mqtt.pid   # optional, default: /tmp/gotify2mqtt.pid
 
 groups:
   - name: <string>                   # unique name for this Gotify instance

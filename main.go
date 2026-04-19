@@ -7,9 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"git.loveyu.info/microservice/gotify-mqtt-forwarder/internal/config"
-	"git.loveyu.info/microservice/gotify-mqtt-forwarder/internal/forwarder"
-	"git.loveyu.info/microservice/gotify-mqtt-forwarder/internal/pid"
+	"github.com/loveyu/gotify2mqtt/internal/config"
+	"github.com/loveyu/gotify2mqtt/internal/forwarder"
+	"github.com/loveyu/gotify2mqtt/internal/pid"
 )
 
 // version 由 CI 构建时通过 -ldflags "-X main.version=vX.Y.Z" 注入
@@ -19,7 +19,7 @@ func main() {
 	configPath := flag.String("config", "config.yaml", "YAML 配置文件路径")
 	flag.Parse()
 
-	log.Printf("gotify-mqtt-forwarder %s 启动", version)
+	log.Printf("gotify2mqtt %s 启动", version)
 
 	// 加载并校验配置
 	cfg, err := config.Load(*configPath)
@@ -42,7 +42,7 @@ func main() {
 	mgr := forwarder.NewManager(cfg)
 	mgr.Start(ctx)
 
-	log.Println("gotify-mqtt-forwarder 已启动，等待消息...")
+	log.Println("gotify2mqtt 已启动，等待消息...")
 	<-ctx.Done()
 
 	log.Println("收到退出信号，正在优雅关闭...")

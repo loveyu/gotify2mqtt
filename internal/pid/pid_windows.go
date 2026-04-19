@@ -19,7 +19,7 @@ type File struct {
 // 否则写入当前 PID。Windows 不支持 flock，使用 PID 存活检测。
 func Acquire(path string) (*File, error) {
 	if path == "" {
-		path = os.TempDir() + `\gotify-mqtt-forwarder.pid`
+		path = os.TempDir() + `\gotify2mqtt.pid`
 	}
 
 	// 检查已有 PID 文件

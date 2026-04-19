@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"git.loveyu.info/microservice/gotify-mqtt-forwarder/internal/config"
+	"github.com/loveyu/gotify2mqtt/internal/config"
 )
 
 // Manager 统一管理所有 Group 的生命周期

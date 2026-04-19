@@ -1,8 +1,8 @@
 # Gotify → MQTT 转发服务配置示例
 # 所有连接参数（Gotify 和 MQTT）均使用 DSN 统一表达。
 
-# PID 文件路径（可选，默认 /tmp/gotify-mqtt-forwarder.pid）
-pid_file: /var/run/gotify-mqtt-forwarder.pid
+# PID 文件路径（可选，默认 /tmp/gotify2mqtt.pid）
+pid_file: /var/run/gotify2mqtt.pid
 
 groups:
   # ── 示例1：HTTP Gotify + 本地 MQTT ──────────────────────────────────
@@ -81,7 +81,7 @@ groups:
 # --------------------|---------|------------------------------------
 # client_id           | 自动    | 自动 = {group}-{target}-{host}
 # qos                 | 0       | QoS 等级：0 / 1 / 2
-# retain              | false   | 是否设置 RETAIN 标志
+# retain              | true    | 是否设置 RETAIN 标志
 # queue_size          | 256     | 异步发布队列深度
 # connect_timeout     | 10s     | 连接超时
 # keep_alive          | 30s     | MQTT 心跳间隔

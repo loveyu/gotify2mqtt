@@ -1,4 +1,4 @@
-module git.loveyu.info/microservice/gotify-mqtt-forwarder
+module github.com/loveyu/gotify2mqtt
 
 go 1.19
 
