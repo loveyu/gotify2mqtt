@@ -1,0 +1,7 @@
+.git
+.github
+*.md
+build/
+dist/
+gotify-plugin-api/
+gotify-server/
