@@ -17,6 +17,7 @@ import (
 "github.com/gorilla/websocket"
 
 "git.loveyu.info/microservice/gotify-mqtt-forwarder/internal/config"
+"git.loveyu.info/microservice/gotify-mqtt-forwarder/internal/gotify"
 "git.loveyu.info/microservice/gotify-mqtt-forwarder/internal/mqtt"
 tmpl "git.loveyu.info/microservice/gotify-mqtt-forwarder/internal/template"
 )
@@ -46,33 +47,39 @@ brokers []*mqtt.Broker
 
 // Group 管理一个 Gotify 实例的 WebSocket 连接和所有转发目标
 type Group struct {
-cfg      config.Group
-userID   uint
-userName string
-targets  []target
-wg       sync.WaitGroup
+	name       string
+	gotifyOpts *gotify.Options
+	userID     uint
+	userName   string
+	targets    []target
+	wg         sync.WaitGroup
 }
 
 // newGroup 初始化 Group，解析所有 DSN 并启动 Broker 连接
 func newGroup(cfg config.Group) (*Group, error) {
-g := &Group{cfg: cfg}
+	gopts, err := gotify.ParseDSN(cfg.Gotify)
+	if err != nil {
+		return nil, fmt.Errorf("[%s] Gotify DSN 解析失败: %w", cfg.Name, err)
+	}
 
-// 解析当前用户信息
-user, err := g.fetchCurrentUser()
-if err != nil {
-return nil, fmt.Errorf("[%s] 获取用户信息失败: %w", cfg.Name, err)
-}
-g.userID = user.ID
-g.userName = user.Name
-log.Printf("[%s] 当前用户: id=%d name=%s", cfg.Name, user.ID, user.Name)
+	g := &Group{name: cfg.Name, gotifyOpts: gopts}
 
-// 解析 DSN 并启动所有 Broker
+	// 解析当前用户信息
+	user, err := g.fetchCurrentUser()
+	if err != nil {
+		return nil, fmt.Errorf("[%s] 获取用户信息失败: %w", cfg.Name, err)
+	}
+	g.userID = user.ID
+	g.userName = user.Name
+	log.Printf("[%s] 当前用户: id=%d name=%s", cfg.Name, user.ID, user.Name)
+
+// 解析 MQTT DSN 并启动所有 Broker
 for _, tc := range cfg.Targets {
 t := target{cfg: tc}
 for _, bc := range tc.Brokers {
 opts, err := mqtt.ParseDSN(bc.DSN)
 if err != nil {
-return nil, fmt.Errorf("[%s][%s] DSN 解析失败: %w", cfg.Name, tc.Name, err)
+return nil, fmt.Errorf("[%s][%s] MQTT DSN 解析失败: %w", cfg.Name, tc.Name, err)
 }
 // 自动生成 client_id：{group}-{target}-{host}
 if opts.ClientID == "" {
@@ -97,25 +104,26 @@ return g, nil
 func (g *Group) Run(ctx context.Context) {
 defer g.wg.Done()
 
-wsURL := g.buildWSURL()
-backoff := time.Second
-const maxBackoff = 60 * time.Second
+backoff := g.gotifyOpts.ReconnectDelay
 
 for {
-if err := g.connectAndReceive(ctx, wsURL); err != nil {
+if err := g.connectAndReceive(ctx); err != nil {
 if ctx.Err() != nil {
-log.Printf("[%s] WebSocket 退出", g.cfg.Name)
+log.Printf("[%s] WebSocket 退出", g.name)
 return
 }
-log.Printf("[%s] WebSocket 断开: %v，%v 后重连", g.cfg.Name, err, backoff)
+log.Printf("[%s] WebSocket 断开: %v，%v 后重连", g.name, err, backoff)
 select {
 case <-time.After(backoff):
 case <-ctx.Done():
 return
 }
-backoff = time.Duration(math.Min(float64(backoff*2), float64(maxBackoff)))
+backoff = time.Duration(math.Min(
+float64(backoff*2),
+float64(g.gotifyOpts.ReconnectDelayMax),
+))
 } else {
-backoff = time.Second
+backoff = g.gotifyOpts.ReconnectDelay
 }
 }
 }
@@ -129,19 +137,19 @@ b.Stop()
 }
 }
 
-func (g *Group) connectAndReceive(ctx context.Context, wsURL string) error {
+func (g *Group) connectAndReceive(ctx context.Context) error {
 dialer := websocket.Dialer{
-HandshakeTimeout: 10 * time.Second,
-TLSClientConfig:  g.buildTLSConfig(),
+HandshakeTimeout: g.gotifyOpts.ConnectTimeout,
+TLSClientConfig:  g.tlsConfig(),
 }
-header := http.Header{"X-Gotify-Key": []string{g.cfg.Gotify.Token}}
+header := http.Header{"X-Gotify-Key": []string{g.gotifyOpts.Token}}
 
-conn, _, err := dialer.DialContext(ctx, wsURL, header)
+conn, _, err := dialer.DialContext(ctx, g.gotifyOpts.WSURL, header)
 if err != nil {
 return fmt.Errorf("连接 WebSocket: %w", err)
 }
 defer conn.Close()
-log.Printf("[%s] WebSocket 已连接: %s", g.cfg.Name, wsURL)
+log.Printf("[%s] WebSocket 已连接: %s", g.name, g.gotifyOpts.WSURL)
 
 go func() {
 <-ctx.Done()
@@ -166,7 +174,7 @@ go g.handleMessage(msgBytes)
 func (g *Group) handleMessage(raw []byte) {
 var msg gotifyMessage
 if err := json.Unmarshal(raw, &msg); err != nil {
-log.Printf("[%s] 解析消息失败: %v", g.cfg.Name, err)
+log.Printf("[%s] 解析消息失败: %v", g.name, err)
 return
 }
 
@@ -175,15 +183,15 @@ if msg.Priority != nil {
 priority = *msg.Priority
 }
 
-data := tmpl.MessageData{
-ID:       msg.ID,
-AppID:    msg.ApplicationID,
-UserID:   g.userID,
-UserName: g.userName,
-Title:    msg.Title,
-Priority: priority,
-Date:     msg.Date,
-}
+	data := tmpl.MessageData{
+		ID:       msg.ID,
+		AppID:    msg.ApplicationID,
+		UserID:   g.userID,
+		UserName: g.userName,
+		Title:    msg.Title,
+		Priority: priority,
+		Date:     msg.Date,
+	}
 
 for ti := range g.targets {
 t := &g.targets[ti]
@@ -195,12 +203,12 @@ b := b
 go func() {
 topics, err := tmpl.RenderTopics(b.Topics(), data)
 if err != nil {
-log.Printf("[%s][%s] 渲染 topic 失败: %v", g.cfg.Name, t.cfg.Name, err)
+log.Printf("[%s][%s] 渲染 topic 失败: %v", g.name, t.cfg.Name, err)
 return
 }
 payload, err := mqtt.BuildPayload(data, msg.Message, msg.Extras)
 if err != nil {
-log.Printf("[%s][%s] 序列化 payload 失败: %v", g.cfg.Name, t.cfg.Name, err)
+log.Printf("[%s][%s] 序列化 payload 失败: %v", g.name, t.cfg.Name, err)
 return
 }
 b.Publish(topics, payload)
@@ -209,37 +217,24 @@ b.Publish(topics, payload)
 }
 }
 
-func (g *Group) buildWSURL() string {
-base := strings.TrimRight(g.cfg.Gotify.URL, "/")
-u, _ := url.Parse(base)
-switch u.Scheme {
-case "https":
-u.Scheme = "wss"
-default:
-u.Scheme = "ws"
-}
-u.Path = strings.TrimRight(u.Path, "/") + "/stream"
-return u.String()
-}
-
-func (g *Group) buildTLSConfig() *tls.Config {
+func (g *Group) tlsConfig() *tls.Config {
 return &tls.Config{
-InsecureSkipVerify: g.cfg.Gotify.TLSSkipVerify, //nolint:gosec
+InsecureSkipVerify: g.gotifyOpts.Insecure, //nolint:gosec
 }
 }
 
 func (g *Group) fetchCurrentUser() (*gotifyUser, error) {
-apiURL := strings.TrimRight(g.cfg.Gotify.URL, "/") + "/current/user"
+apiURL := strings.TrimRight(g.gotifyOpts.BaseURL, "/") + "/current/user"
 req, err := http.NewRequest(http.MethodGet, apiURL, nil)
 if err != nil {
 return nil, err
 }
-req.Header.Set("X-Gotify-Key", g.cfg.Gotify.Token)
+req.Header.Set("X-Gotify-Key", g.gotifyOpts.Token)
 
 httpClient := &http.Client{
-Timeout: 10 * time.Second,
+Timeout: g.gotifyOpts.ConnectTimeout,
 Transport: &http.Transport{
-TLSClientConfig: g.buildTLSConfig(),
+TLSClientConfig: g.tlsConfig(),
 },
 }
 resp, err := httpClient.Do(req)

@@ -1,24 +1,23 @@
 # Gotify → MQTT 转发服务配置示例
-# 支持多个 Gotify 实例（group），每个实例可转发到多个目标（target），
-# 每个目标可发布到多个 Broker（broker）。
+# 所有连接参数（Gotify 和 MQTT）均使用 DSN 统一表达。
 
-# PID 文件路径，保证同时只有一个进程（可选，默认 /tmp/gotify-mqtt-forwarder.pid）
+# PID 文件路径（可选，默认 /tmp/gotify-mqtt-forwarder.pid）
 pid_file: /var/run/gotify-mqtt-forwarder.pid
 
 groups:
-  # ── 示例1：单实例转发 ───────────────────────────────────────────────
+  # ── 示例1：HTTP Gotify + 本地 MQTT ──────────────────────────────────
   - name: home-gotify
-    gotify:
-      url: "http://gotify.example.com:8080"
-      token: "your-client-token"
-      tls_skip_verify: false
+    # Gotify DSN 格式：scheme://token@host[:port][/basepath][?params]
+    # scheme：http | https
+    # token 填在 userinfo 的 username 位置（无需密码）
+    gotify: "http://my-client-token@gotify.example.com:8080"
 
     targets:
       - name: all-messages
         filter: {}   # 空 filter 表示转发所有消息
 
         brokers:
-          # ── mqtt:// ── 明文 TCP，本地 Broker ──────────────────────────
+          # ── mqtt:// ── 明文 TCP ───────────────────────────────────────
           - dsn: "mqtt://user:pass@localhost:1883?client_id=home-forwarder&qos=1&keep_alive=30s"
             topics:
               - "gotify/app/{{.AppID}}/messages"
@@ -49,33 +48,39 @@ groups:
             topics:
               - "alerts/{{.AppID}}/{{.Title}}"
 
-  # ── 示例2：多实例并行 ──────────────────────────────────────────────
+  # ── 示例2：HTTPS Gotify + mTLS MQTT ─────────────────────────────────
   - name: office-gotify
-    gotify:
-      url: "https://gotify-office.example.com"
-      token: "office-token"
-      tls_skip_verify: false
+    # insecure=true 可跳过 TLS 证书校验（自签名证书场景）
+    gotify: "https://office-token@gotify-office.example.com?reconnect_delay=2s&reconnect_delay_max=120s"
 
     targets:
       - name: office-all
         filter:
-          user_ids: [1]   # 仅当前 token 对应用户
+          user_ids: [1]
         brokers:
           - dsn: "mqtts://admin:secret@mqtt-office.example.com:8883?cert=/etc/ssl/client.crt&key=/etc/ssl/client.key&ca=/etc/ssl/ca.crt"
             topics:
               - "office/gotify/{{.AppID}}"
 
-# ── DSN 参数速查表 ────────────────────────────────────────────────────
+# ── Gotify DSN 参数速查 ───────────────────────────────────────────────
 # 参数名               | 默认值  | 说明
 # --------------------|---------|------------------------------------
-# client_id           | 自动    | MQTT 客户端 ID（自动 = group-target-host）
+# insecure            | false   | 跳过 TLS 证书校验
+# connect_timeout     | 10s     | HTTP/WS 连接超时
+# reconnect_delay     | 1s      | 初始重连延迟（指数退避起点）
+# reconnect_delay_max | 60s     | 最大重连延迟
+
+# ── MQTT DSN 参数速查 ─────────────────────────────────────────────────
+# 参数名               | 默认值  | 说明
+# --------------------|---------|------------------------------------
+# client_id           | 自动    | 自动 = {group}-{target}-{host}
 # qos                 | 0       | QoS 等级：0 / 1 / 2
 # retain              | false   | 是否设置 RETAIN 标志
 # queue_size          | 256     | 异步发布队列深度
 # connect_timeout     | 10s     | 连接超时
 # keep_alive          | 30s     | MQTT 心跳间隔
 # reconnect_delay     | 1s      | 初始重连延迟
-# reconnect_delay_max | 60s     | 最大重连延迟（指数退避上限）
+# reconnect_delay_max | 60s     | 最大重连延迟
 # ca                  | ""      | CA 证书路径（mqtts/wss）
 # cert                | ""      | 客户端证书路径（双向 TLS）
 # key                 | ""      | 客户端私钥路径（双向 TLS）

@@ -17,15 +17,19 @@ Groups  []Group `yaml:"groups"`
 // Group 对应一个 Gotify 实例及其转发目标列表
 type Group struct {
 Name    string   `yaml:"name"`
-Gotify  Gotify   `yaml:"gotify"`
+// Gotify DSN 格式：scheme://token@host[:port][/basepath][?params]
+//
+// 支持 scheme：http | https
+//
+// token 填写在 userinfo 的 username 位置（无需密码）。
+//
+// 查询参数：
+//   insecure            跳过 TLS 证书校验 true/false（默认 false）
+//   connect_timeout     连接超时，如 10s（默认 10s）
+//   reconnect_delay     初始重连延迟，如 1s（默认 1s）
+//   reconnect_delay_max 最大重连延迟，如 60s（默认 60s）
+Gotify  string   `yaml:"gotify"`
 Targets []Target `yaml:"targets"`
-}
-
-// Gotify WebSocket 连接配置
-type Gotify struct {
-URL           string `yaml:"url"`             // http(s)://host:port
-Token         string `yaml:"token"`           // 用户 Client Token
-TLSSkipVerify bool   `yaml:"tls_skip_verify"` // 跳过 TLS 证书校验
 }
 
 // Target 一组过滤规则 + 目标 Broker 列表
@@ -37,14 +41,10 @@ Brokers []Broker `yaml:"brokers"`
 
 // Filter 消息过滤规则，所有条件 AND 关系；字段零值表示不过滤
 type Filter struct {
-// 仅转发这些 App 的消息（空表示全部）
-AppIDs []uint `yaml:"app_ids"`
-// 仅转发这些用户 ID 的消息（空表示全部）
-UserIDs []uint `yaml:"user_ids"`
-// 最低优先级（含）；0 表示不限
-PriorityMin int `yaml:"priority_min"`
-// 最高优先级（含）；nil 表示不限
-PriorityMax *int `yaml:"priority_max"`
+AppIDs      []uint `yaml:"app_ids"`
+UserIDs     []uint `yaml:"user_ids"`
+PriorityMin int    `yaml:"priority_min"`
+PriorityMax *int   `yaml:"priority_max"`
 }
 
 // Broker 单个 MQTT Broker 配置。
@@ -56,18 +56,18 @@ type Broker struct {
 // 支持 scheme：mqtt | mqtts | ws | wss
 //
 // 查询参数：
-//   client_id          MQTT 客户端 ID（留空自动生成）
-//   qos                QoS 等级 0/1/2（默认 0）
-//   retain             保留消息 true/false（默认 false）
-//   queue_size         异步发布队列深度（默认 256）
-//   connect_timeout    连接超时，如 10s（默认 10s）
-//   keep_alive         心跳间隔，如 30s（默认 30s）
-//   reconnect_delay    初始重连延迟，如 1s（默认 1s）
+//   client_id           MQTT 客户端 ID（留空自动生成）
+//   qos                 QoS 等级 0/1/2（默认 0）
+//   retain              保留消息 true/false（默认 false）
+//   queue_size          异步发布队列深度（默认 256）
+//   connect_timeout     连接超时，如 10s（默认 10s）
+//   keep_alive          心跳间隔，如 30s（默认 30s）
+//   reconnect_delay     初始重连延迟，如 1s（默认 1s）
 //   reconnect_delay_max 最大重连延迟，如 60s（默认 60s）
-//   ca                 CA 证书文件路径（mqtts/wss）
-//   cert               客户端证书路径（mTLS）
-//   key                客户端私钥路径（mTLS）
-//   insecure           跳过 TLS 验证 true/false（默认 false）
+//   ca                  CA 证书文件路径（mqtts/wss）
+//   cert                客户端证书路径（mTLS）
+//   key                 客户端私钥路径（mTLS）
+//   insecure            跳过 TLS 验证 true/false（默认 false）
 DSN string `yaml:"dsn"`
 
 // Topics 是发布目标的 topic 模板列表，支持 Go template 变量：
@@ -106,14 +106,8 @@ for gi, g := range c.Groups {
 if g.Name == "" {
 return fmt.Errorf("group[%d].name 不能为空", gi)
 }
-if g.Gotify.URL == "" {
-return fmt.Errorf("group[%d](%s).gotify.url 不能为空", gi, g.Name)
-}
-if _, err := url.Parse(g.Gotify.URL); err != nil {
-return fmt.Errorf("group[%d](%s).gotify.url 格式错误: %w", gi, g.Name, err)
-}
-if g.Gotify.Token == "" {
-return fmt.Errorf("group[%d](%s).gotify.token 不能为空", gi, g.Name)
+if err := validateGotifyDSN(fmt.Sprintf("group[%d](%s).gotify", gi, g.Name), g.Gotify); err != nil {
+return err
 }
 if len(g.Targets) == 0 {
 return fmt.Errorf("group[%d](%s) 至少需要一个 target", gi, g.Name)
@@ -129,7 +123,7 @@ gi, g.Name, ti, t.Name)
 for bi, b := range t.Brokers {
 loc := fmt.Sprintf("group[%d](%s).targets[%d](%s).brokers[%d]",
 gi, g.Name, ti, t.Name, bi)
-if err := validateBroker(loc, b); err != nil {
+if err := validateBrokerDSN(loc, b); err != nil {
 return err
 }
 }
@@ -138,7 +132,29 @@ return err
 return nil
 }
 
-func validateBroker(loc string, b Broker) error {
+func validateGotifyDSN(loc, dsn string) error {
+if dsn == "" {
+return fmt.Errorf("%s 不能为空", loc)
+}
+u, err := url.Parse(dsn)
+if err != nil {
+return fmt.Errorf("%s DSN 格式错误: %w", loc, err)
+}
+switch u.Scheme {
+case "http", "https":
+default:
+return fmt.Errorf("%s scheme 必须为 http/https，当前: %q", loc, u.Scheme)
+}
+if u.Host == "" {
+return fmt.Errorf("%s DSN 缺少 host", loc)
+}
+if u.User == nil || u.User.Username() == "" {
+return fmt.Errorf("%s DSN 缺少 token（格式：scheme://token@host）", loc)
+}
+return nil
+}
+
+func validateBrokerDSN(loc string, b Broker) error {
 if b.DSN == "" {
 return fmt.Errorf("%s.dsn 不能为空", loc)
 }

@@ -38,6 +38,6 @@ func (m *Manager) Stop() {
 	for _, g := range m.groups {
 		g.wg.Wait()
 		g.Stop()
-		log.Printf("[manager] group %s 已关闭", g.cfg.Name)
+		log.Printf("[manager] group %s 已关闭", g.name)
 	}
 }
