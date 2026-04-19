@@ -39,7 +39,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux
           - { goos: linux,   goarch: amd64    }
           - { goos: linux,   goarch: arm64    }
           - { goos: linux,   goarch: arm,      goarm: "7" }
@@ -47,10 +46,8 @@ jobs:
           - { goos: linux,   goarch: "386"    }
           - { goos: linux,   goarch: riscv64  }
           - { goos: linux,   goarch: mips64le }
-          # macOS
           - { goos: darwin,  goarch: amd64    }
           - { goos: darwin,  goarch: arm64    }
-          # Windows
           - { goos: windows, goarch: amd64    }
           - { goos: windows, goarch: arm64    }
 
@@ -116,13 +113,29 @@ jobs:
             dist/*.zip
           retention-days: 3
 
-  # ── Docker 多架构镜像 → GHCR ──────────────────────────────────────────────────
-  docker:
-    name: Docker Image
+  # ── Docker 单平台并行构建（推送 digest）────────────────────────────────────────
+  docker-build:
+    name: Docker (${{ matrix.platform }})
     needs: lint
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+          - linux/arm/v7
+          - linux/arm/v6
+          - linux/386
+          - linux/riscv64
+
     steps:
       - uses: actions/checkout@v4
+
+      - name: Prepare safe platform name
+        run: |
+          SAFE="${{ matrix.platform }}"
+          echo "SAFE_PLATFORM=${SAFE//\//-}" >> "$GITHUB_ENV"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -143,33 +156,94 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/gotify2mqtt
-          tags: |
-            # v1.2.3 → 1.2.3 / 1.2 / 1 / latest
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            # main 分支 → edge
-            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
-            # PR → pr-42
-            type=ref,event=pr
 
-      - name: Build and push
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6,linux/386,linux/riscv64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ github.ref_name }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          build-args: VERSION=${{ github.ref_name }}
+          # 推送裸 digest，不打 tag；由 docker-merge 统一创建 manifest
+          outputs: >-
+            type=image,
+            name=ghcr.io/${{ github.repository_owner }}/gotify2mqtt,
+            push-by-digest=true,
+            name-canonical=true,
+            push=${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=docker-${{ env.SAFE_PLATFORM }}
+          cache-to: type=gha,mode=max,scope=docker-${{ env.SAFE_PLATFORM }}
+
+      - name: Export digest
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ env.SAFE_PLATFORM }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── Docker manifest 合并（多架构 tag）─────────────────────────────────────────
+  docker-merge:
+    name: Docker Manifest
+    needs: docker-build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/gotify2mqtt
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=pr
+
+      - name: Create and push manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/${{ github.repository_owner }}/gotify2mqtt@sha256:%s ' *)
+
+      - name: Inspect manifest
+        run: |
+          docker buildx imagetools inspect \
+            ghcr.io/${{ github.repository_owner }}/gotify2mqtt:${{ steps.meta.outputs.version }}
 
   # ── 打 Tag 时发布 Release ─────────────────────────────────────────────────────
   release:
     name: GitHub Release
-    needs: [build, docker]
+    needs: [build, docker-merge]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
 
