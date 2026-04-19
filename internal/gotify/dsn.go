@@ -4,17 +4,22 @@ import (
 "fmt"
 "net/url"
 "strconv"
+"strings"
 "time"
 )
 
 // Options 是解析 Gotify DSN 后的完整连接配置
 type Options struct {
-// BaseURL 是 HTTP/HTTPS 基础地址（无 /stream 后缀）
+// BaseURL 是对应的 HTTP/HTTPS 地址（用于 REST API 调用，不含认证信息）
 BaseURL string
-// WSURL 是对应的 WebSocket 地址（/stream 后缀）
+// WSURL 是 WebSocket 连接地址（含 /stream 后缀，不含认证信息）
 WSURL string
-// Token 即 Gotify Client Token（DSN 中的 userinfo username）
+
+// Token 是 Gotify Client Token（DSN 查询参数 token=）
 Token string
+// Username / Password 用于反向代理等中间层的 Basic Auth（可选）
+Username string
+Password string
 
 ConnectTimeout    time.Duration
 ReconnectDelay    time.Duration
@@ -25,12 +30,13 @@ Insecure bool
 
 // ParseDSN 解析 Gotify DSN 字符串为 Options。
 //
-// 格式：scheme://token@host[:port][/basepath][?params]
+// 格式：scheme://[user:pass@]host[:port][/basepath]?token=xxx[&params]
 //
-// 支持的 scheme：http | https
+// 支持的 scheme：ws | wss
 //
 // 查询参数：
 //
+//token               Gotify Client Token（必填）
 //insecure            跳过 TLS 证书校验 true/false（默认 false）
 //connect_timeout     连接超时，如 10s（默认 10s）
 //reconnect_delay     初始重连延迟，如 1s（默认 1s）
@@ -42,42 +48,44 @@ return nil, fmt.Errorf("Gotify DSN 格式错误: %w", err)
 }
 
 switch u.Scheme {
-case "http", "https":
+case "ws", "wss":
 default:
-return nil, fmt.Errorf("Gotify DSN scheme 必须为 http 或 https，当前: %q", u.Scheme)
+return nil, fmt.Errorf("Gotify DSN scheme 必须为 ws 或 wss，当前: %q", u.Scheme)
 }
 
 if u.Host == "" {
 return nil, fmt.Errorf("Gotify DSN 缺少 host")
 }
 
-token := ""
-if u.User != nil {
-token = u.User.Username()
-}
+q := u.Query()
+
+token := q.Get("token")
 if token == "" {
-return nil, fmt.Errorf("Gotify DSN 缺少 token（格式：scheme://token@host）")
+return nil, fmt.Errorf("Gotify DSN 缺少必填参数 token（示例：?token=your-client-token）")
 }
 
-// 构建无认证信息的 baseURL
-clean := *u
-clean.User = nil
-clean.RawQuery = ""
-clean.Fragment = ""
-baseURL := clean.String()
+basePath := strings.TrimRight(u.Path, "/")
 
-// 构建 WebSocket URL
-wsURL := clean
-switch u.Scheme {
-case "https":
-wsURL.Scheme = "wss"
-default:
-wsURL.Scheme = "ws"
+// WebSocket URL（不含认证信息和查询参数）
+wsURL := &url.URL{
+Scheme: u.Scheme,
+Host:   u.Host,
+Path:   basePath + "/stream",
 }
-wsURL.Path = trimRight(wsURL.Path, "/") + "/stream"
+
+// HTTP BaseURL（ws→http, wss→https，用于 REST API 调用）
+httpScheme := "http"
+if u.Scheme == "wss" {
+httpScheme = "https"
+}
+baseURL := &url.URL{
+Scheme: httpScheme,
+Host:   u.Host,
+Path:   basePath,
+}
 
 opts := &Options{
-BaseURL:           baseURL,
+BaseURL:           baseURL.String(),
 WSURL:             wsURL.String(),
 Token:             token,
 ConnectTimeout:    10 * time.Second,
@@ -85,7 +93,11 @@ ReconnectDelay:    1 * time.Second,
 ReconnectDelayMax: 60 * time.Second,
 }
 
-q := u.Query()
+// Basic Auth（可选，用于反向代理）
+if u.User != nil {
+opts.Username = u.User.Username()
+opts.Password, _ = u.User.Password()
+}
 
 if v := q.Get("insecure"); v != "" {
 b, err := strconv.ParseBool(v)
@@ -120,11 +132,4 @@ opts.ReconnectDelayMax = d
 }
 
 return opts, nil
-}
-
-func trimRight(s, cut string) string {
-for len(s) > 0 && len(cut) > 0 && s[len(s)-1] == cut[0] {
-s = s[:len(s)-1]
-}
-return s
 }

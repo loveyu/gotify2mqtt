@@ -8,9 +8,9 @@ groups:
   # ── 示例1：HTTP Gotify + 本地 MQTT ──────────────────────────────────
   - name: home-gotify
     # Gotify DSN 格式：scheme://token@host[:port][/basepath][?params]
-    # scheme：http | https
+    # scheme：ws | wss
     # token 填在 userinfo 的 username 位置（无需密码）
-    gotify: "http://my-client-token@gotify.example.com:8080"
+    gotify: "ws://gotify.example.com:8080?token=my-client-token"
 
     targets:
       - name: all-messages
@@ -50,8 +50,8 @@ groups:
 
   # ── 示例2：HTTPS Gotify + mTLS MQTT ─────────────────────────────────
   - name: office-gotify
-    # insecure=true 可跳过 TLS 证书校验（自签名证书场景）
-    gotify: "https://office-token@gotify-office.example.com?reconnect_delay=2s&reconnect_delay_max=120s"
+    # 带反向代理 Basic Auth + TLS
+    gotify: "wss://proxyuser:p%40ssword@gotify-office.example.com?token=office-token&reconnect_delay=2s&reconnect_delay_max=120s"
 
     targets:
       - name: office-all
@@ -63,10 +63,16 @@ groups:
               - "office/gotify/{{.AppID}}"
 
 # ── Gotify DSN 参数速查 ───────────────────────────────────────────────
+# 格式：scheme://[user:pass@]host[:port][/base]?token=xxx[&params]
+# scheme：ws（明文）| wss（TLS）
+# user:pass：可选，用于反向代理 Basic Auth；特殊字符需 percent-encode
+#            如密码含 @ 写为 %40，含 : 写为 %3A
+#
 # 参数名               | 默认值  | 说明
 # --------------------|---------|------------------------------------
-# insecure            | false   | 跳过 TLS 证书校验
-# connect_timeout     | 10s     | HTTP/WS 连接超时
+# token               | 必填    | Gotify Client Token
+# insecure            | false   | 跳过 TLS 证书校验（wss 自签名场景）
+# connect_timeout     | 10s     | WebSocket 握手超时
 # reconnect_delay     | 1s      | 初始重连延迟（指数退避起点）
 # reconnect_delay_max | 60s     | 最大重连延迟
 

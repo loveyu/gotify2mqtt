@@ -2,8 +2,9 @@ package forwarder
 
 import (
 "context"
-"crypto/tls"
-"encoding/json"
+	"crypto/tls"
+	"encoding/base64"
+	"encoding/json"
 "fmt"
 "io"
 "log"
@@ -143,6 +144,11 @@ HandshakeTimeout: g.gotifyOpts.ConnectTimeout,
 TLSClientConfig:  g.tlsConfig(),
 }
 header := http.Header{"X-Gotify-Key": []string{g.gotifyOpts.Token}}
+if g.gotifyOpts.Username != "" {
+creds := base64.StdEncoding.EncodeToString(
+[]byte(g.gotifyOpts.Username + ":" + g.gotifyOpts.Password))
+header.Set("Authorization", "Basic "+creds)
+}
 
 conn, _, err := dialer.DialContext(ctx, g.gotifyOpts.WSURL, header)
 if err != nil {
@@ -230,6 +236,9 @@ if err != nil {
 return nil, err
 }
 req.Header.Set("X-Gotify-Key", g.gotifyOpts.Token)
+if g.gotifyOpts.Username != "" {
+req.SetBasicAuth(g.gotifyOpts.Username, g.gotifyOpts.Password)
+}
 
 httpClient := &http.Client{
 Timeout: g.gotifyOpts.ConnectTimeout,

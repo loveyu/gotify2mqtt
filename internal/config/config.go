@@ -19,9 +19,11 @@ type Group struct {
 Name    string   `yaml:"name"`
 // Gotify DSN 格式：scheme://token@host[:port][/basepath][?params]
 //
-// 支持 scheme：http | https
+// 支持 scheme：ws | wss
 //
-// token 填写在 userinfo 的 username 位置（无需密码）。
+// token 填在查询参数中（?token=xxx）。
+	// userinfo（[user:pass@]）可选，用于反向代理 Basic Auth，
+	// 特殊字符需 percent-encode（如 @ → %40，: → %3A）。
 //
 // 查询参数：
 //   insecure            跳过 TLS 证书校验 true/false（默认 false）
@@ -141,15 +143,15 @@ if err != nil {
 return fmt.Errorf("%s DSN 格式错误: %w", loc, err)
 }
 switch u.Scheme {
-case "http", "https":
+case "ws", "wss":
 default:
-return fmt.Errorf("%s scheme 必须为 http/https，当前: %q", loc, u.Scheme)
+return fmt.Errorf("%s scheme 必须为 ws/wss，当前: %q", loc, u.Scheme)
 }
 if u.Host == "" {
 return fmt.Errorf("%s DSN 缺少 host", loc)
 }
-if u.User == nil || u.User.Username() == "" {
-return fmt.Errorf("%s DSN 缺少 token（格式：scheme://token@host）", loc)
+if u.Query().Get("token") == "" {
+return fmt.Errorf("%s DSN 缺少必填参数 token（格式：?token=your-client-token）", loc)
 }
 return nil
 }
