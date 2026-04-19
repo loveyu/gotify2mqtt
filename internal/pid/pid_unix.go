@@ -5,6 +5,7 @@ package pid
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"syscall"
 )
@@ -18,6 +19,10 @@ type File struct {
 // Acquire 尝试独占锁定 PID 文件，写入当前进程 PID。
 // 若文件已被其他进程锁定，立即返回错误（非阻塞）。
 func Acquire(path string) (*File, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("创建 PID 目录 %s: %w", filepath.Dir(path), err)
+	}
+
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("打开 PID 文件 %s: %w", path, err)

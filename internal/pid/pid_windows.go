@@ -5,6 +5,7 @@ package pid
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -32,6 +33,10 @@ func Acquire(path string) (*File, error) {
 				}
 			}
 		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("创建 PID 目录: %w", err)
 	}
 
 	if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
