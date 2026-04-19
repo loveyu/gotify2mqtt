@@ -1,0 +1,96 @@
+# gotify-mqtt-forwarder 配置示例
+# 复制为 config.yaml 后按需修改
+
+# PID 文件路径，用于保证单进程运行
+pid_file: /var/run/gotify-mqtt-forwarder.pid
+
+groups:
+  # ── 示例 1：家庭 Gotify，按 AppID 分流到不同 Broker ──────────────────────
+  - name: home
+
+    gotify:
+      url: https://gotify.home.example.com
+      token: "your-client-token-here"
+      tls_skip_verify: false
+
+    targets:
+      # 目标 A：转发所有消息到本地 Broker，Topic 中嵌入 AppID 和 Title
+      - name: all-to-local
+        filter:
+          # app_ids 为空 → 不过滤，转发全部应用消息
+          app_ids: []
+          # user_ids 为空 → 不过滤（Token 所属用户 ID 在启动时自动解析）
+          user_ids: []
+          priority_min: 0
+          # priority_max 不填 → 不限上限
+        brokers:
+          - url: mqtt://broker.home.example.com:1883
+            username: mqtt_user
+            password: mqtt_pass
+            client_id: forwarder-home-all
+            qos: 0
+            retain: false
+            queue_size: 512
+            topics:
+              - "gotify/{{.AppID}}/messages"
+              - "gotify/user/{{.UserID}}/all"
+
+      # 目标 B：只转发 AppID 为 10、20 且优先级 ≥ 7 的告警到安全 Broker
+      - name: critical-alerts
+        filter:
+          app_ids: [10, 20]
+          priority_min: 7
+        brokers:
+          - url: mqtts://secure-broker.home.example.com:8883
+            client_id: forwarder-home-critical
+            qos: 1
+            retain: true
+            topics:
+              - "alerts/critical/{{.AppID}}/{{.Title}}"
+              - "alerts/all"
+            tls:
+              ca: /etc/ssl/certs/ca.crt
+              # cert / key 可选（mTLS）
+              # cert: /etc/ssl/certs/client.crt
+              # key:  /etc/ssl/certs/client.key
+              insecure: false
+
+  # ── 示例 2：公司 Gotify，按 UserID 路由，同时发布到两个 Broker ──────────
+  - name: work
+
+    gotify:
+      url: https://gotify.corp.example.com
+      token: "work-client-token"
+
+    targets:
+      # 所有消息同时转发到两个 Broker（主 + 备）
+      - name: dual-broker
+        filter:
+          priority_min: 0
+        brokers:
+          # 主 Broker
+          - url: mqtt://mqtt-primary.corp.example.com:1883
+            client_id: forwarder-work-primary
+            qos: 1
+            topics:
+              - "corp/gotify/user/{{.UserID}}/app/{{.AppID}}"
+              - "corp/gotify/all"
+          # 备 Broker
+          - url: mqtt://mqtt-backup.corp.example.com:1883
+            client_id: forwarder-work-backup
+            qos: 1
+            topics:
+              - "backup/gotify/{{.AppID}}/{{.Title}}"
+
+      # 仅特定用户（UserID=5）的高优先级消息
+      - name: user5-high-priority
+        filter:
+          user_ids: [5]
+          priority_min: 8
+        brokers:
+          - url: mqtt://mqtt-primary.corp.example.com:1883
+            client_id: forwarder-work-user5
+            qos: 2
+            retain: true
+            topics:
+              - "corp/vip/user/{{.UserID}}/urgent"

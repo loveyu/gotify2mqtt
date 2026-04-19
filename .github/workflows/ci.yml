@@ -1,0 +1,132 @@
+name: CI / Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write  # 创建 Release 和上传 Asset 需要
+
+jobs:
+  # ── 代码质量检查 ────────────────────────────────────────────────────────────
+  lint:
+    name: Lint & Vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race -coverprofile=coverage.out ./...
+
+  # ── 多平台并行构建 ──────────────────────────────────────────────────────────
+  build:
+    name: Build (${{ matrix.goos }}/${{ matrix.goarch }}${{ matrix.goarm && format('v{0}', matrix.goarm) || '' }})
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux
+          - { goos: linux,   goarch: amd64  }
+          - { goos: linux,   goarch: arm64  }
+          - { goos: linux,   goarch: arm,    goarm: "7" }
+          - { goos: linux,   goarch: arm,    goarm: "6" }
+          - { goos: linux,   goarch: "386"  }
+          - { goos: linux,   goarch: riscv64 }
+          - { goos: linux,   goarch: mips64le }
+          # macOS
+          - { goos: darwin,  goarch: amd64  }
+          - { goos: darwin,  goarch: arm64  }
+          # Windows
+          - { goos: windows, goarch: amd64  }
+          - { goos: windows, goarch: arm64  }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binary
+        env:
+          GOOS:   ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM:  ${{ matrix.goarm }}
+          CGO_ENABLED: "0"
+        run: |
+          # 构建输出文件名
+          SUFFIX="${{ matrix.goos }}-${{ matrix.goarch }}"
+          if [ -n "${{ matrix.goarm }}" ]; then
+            SUFFIX="${SUFFIX}v${{ matrix.goarm }}"
+          fi
+          EXT=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
+
+          OUTPUT="build/gotify2mqtt-${SUFFIX}${EXT}"
+          mkdir -p build
+
+          go build \
+            -trimpath \
+            -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
+            -o "${OUTPUT}" \
+            ./
+
+          echo "Built: ${OUTPUT}"
+          ls -lh "${OUTPUT}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          # 每个 matrix 产物单独命名，release job 合并下载
+          name: binary-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goarm && format('v{0}', matrix.goarm) || '' }}
+          path: build/
+          retention-days: 7
+
+  # ── 打 Tag 时自动发布 Release ───────────────────────────────────────────────
+  release:
+    name: GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整历史以生成 changelog
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          pattern: binary-*
+          merge-multiple: true  # 合并到同一目录
+
+      - name: List release assets
+        run: ls -lh artifacts/
+
+      - name: Create checksums
+        working-directory: artifacts
+        run: sha256sum * > SHA256SUMS.txt
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}  # v1.0.0-rc.1 → prerelease
