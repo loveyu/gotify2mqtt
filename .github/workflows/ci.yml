@@ -116,8 +116,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goarm && format('v{0}', matrix.goarm) || '' }}
-          path: dist/*.tar.gz
-                dist/*.zip
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
           retention-days: 3
 
   # ── 打 Tag 时发布 Release ─────────────────────────────────────────────────────
@@ -142,6 +143,7 @@ jobs:
       - name: Generate checksums
         working-directory: dist
         run: |
+          ls -lh
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
