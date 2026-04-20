@@ -12,18 +12,17 @@ import (
 	"time"
 
 	paho "github.com/eclipse/paho.mqtt.golang"
-
-	tmpl "github.com/loveyu/gotify2mqtt/internal/template"
 )
 
-// Payload 是发布到 MQTT 的消息体
+// Payload 是发布到 MQTT 的消息体（保留原始字段，仅注入 userid）
+// 注意：实际序列化基于原始 JSON 透传，此结构体仅作文档参考
 type Payload struct {
 	ID       uint                   `json:"id"`
-	AppID    uint                   `json:"app_id"`
-	UserID   uint                   `json:"user_id"`
+	AppID    uint                   `json:"appid"`
+	UserID   uint                   `json:"userid"`
 	Title    string                 `json:"title"`
 	Message  string                 `json:"message"`
-	Priority int                    `json:"priority"`
+	Priority *int                   `json:"priority"`
 	Date     time.Time              `json:"date"`
 	Extras   map[string]interface{} `json:"extras,omitempty"`
 }
@@ -100,19 +99,15 @@ func (b *Broker) Publish(topics []string, payload []byte) {
 	}
 }
 
-// BuildPayload 将消息数据序列化为 JSON Payload
-func BuildPayload(data tmpl.MessageData, msg string, extras map[string]interface{}) ([]byte, error) {
-	p := Payload{
-		ID:       data.ID,
-		AppID:    data.AppID,
-		UserID:   data.UserID,
-		Title:    data.Title,
-		Message:  msg,
-		Priority: data.Priority,
-		Date:     data.Date,
-		Extras:   extras,
+// BuildPayload 在原始 Gotify JSON 消息上注入 userid 后返回，
+// 其余所有字段原样透传，不做任何变换。
+func BuildPayload(raw json.RawMessage, userID uint) ([]byte, error) {
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
 	}
-	return json.Marshal(p)
+	m["userid"] = userID
+	return json.Marshal(m)
 }
 
 func (b *Broker) publishLoop() {

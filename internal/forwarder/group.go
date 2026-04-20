@@ -212,7 +212,7 @@ func (g *Group) handleMessage(raw []byte) {
 					log.Printf("[%s][%s] 渲染 topic 失败: %v", g.name, t.cfg.Name, err)
 					return
 				}
-				payload, err := mqtt.BuildPayload(data, msg.Message, msg.Extras)
+				payload, err := mqtt.BuildPayload(raw, g.userID)
 				if err != nil {
 					log.Printf("[%s][%s] 序列化 payload 失败: %v", g.name, t.cfg.Name, err)
 					return
